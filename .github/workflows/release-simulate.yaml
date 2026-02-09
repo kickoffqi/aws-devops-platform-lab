@@ -1,0 +1,108 @@
+name: Release Strategy Simulation (Canary / Blue-Green)
+
+on:
+    workflow_dispatch:
+        inputs:
+            strategy:
+                description: "Deployment strategy to simulate"
+                required: true
+                type: choice
+                options:
+                    - canary
+                    - blue-green
+            service_url:
+                description: "Health endpoint URL (e.g. http://demo-dev-alb-xxxx.ap-southeast-4.elb.amazonaws.com/health)"
+                required: true
+                type: string
+            check_retries:
+                description: "Health check retries per stage"
+                required: false
+                default: "5"
+                type: string
+
+permissions:
+    contents: read
+
+jobs:
+    simulate:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Print simulation context
+              run: |
+                  echo "Strategy: ${{ inputs.strategy }}"
+                  echo "Service URL: ${{ inputs.service_url }}"
+                  echo "Run ID: ${{ github.run_id }}"
+
+            - name: Health check helper
+              id: helper
+              run: |
+                  cat > ./healthcheck.sh <<'EOF'
+                  #!/usr/bin/env bash
+                  set -euo pipefail
+                  URL="$1"
+                  RETRIES="${2:-5}"
+                  for i in $(seq 1 "$RETRIES"); do
+                    CODE=$(curl -s -o /tmp/health.out -w "%{http_code}" "$URL" || true)
+                    echo "Attempt $i/$RETRIES -> HTTP $CODE"
+                    if [ "$CODE" = "200" ]; then
+                      echo "Healthy"
+                      exit 0
+                    fi
+                    sleep 5
+                  done
+                  echo "Health check failed after $RETRIES retries"
+                  cat /tmp/health.out || true
+                  exit 1
+                  EOF
+                  chmod +x ./healthcheck.sh
+
+            - name: Canary stage 1 (10%)
+              if: ${{ inputs.strategy == 'canary' }}
+              run: |
+                  echo "Simulating canary traffic shift: 10%"
+                  ./healthcheck.sh "${{ inputs.service_url }}" "${{ inputs.check_retries }}"
+
+            - name: Canary stage 2 (50%)
+              if: ${{ inputs.strategy == 'canary' }}
+              run: |
+                  echo "Simulating canary traffic shift: 50%"
+                  sleep 8
+                  ./healthcheck.sh "${{ inputs.service_url }}" "${{ inputs.check_retries }}"
+
+            - name: Canary stage 3 (100%)
+              if: ${{ inputs.strategy == 'canary' }}
+              run: |
+                  echo "Simulating canary traffic shift: 100%"
+                  sleep 8
+                  ./healthcheck.sh "${{ inputs.service_url }}" "${{ inputs.check_retries }}"
+                  echo "Canary simulation passed"
+
+            - name: Blue deploy + smoke test
+              if: ${{ inputs.strategy == 'blue-green' }}
+              run: |
+                  echo "Simulating BLUE environment deployment"
+                  ./healthcheck.sh "${{ inputs.service_url }}" "${{ inputs.check_retries }}"
+
+            - name: Simulate traffic switch (blue -> green)
+              if: ${{ inputs.strategy == 'blue-green' }}
+              run: |
+                  echo "Simulating traffic switch from BLUE to GREEN"
+                  sleep 8
+                  ./healthcheck.sh "${{ inputs.service_url }}" "${{ inputs.check_retries }}"
+                  echo "Blue/Green simulation passed"
+
+            - name: Rollback simulation on failure
+              if: ${{ failure() }}
+              run: |
+                  echo "Simulation failed -> rollback triggered (simulation)"
+                  echo "Action: restore previous stable version and halt rollout"
+
+            - name: Summary
+              if: ${{ success() }}
+              run: |
+                  echo "✅ Release simulation succeeded"
+                  echo "Strategy: ${{ inputs.strategy }}"
