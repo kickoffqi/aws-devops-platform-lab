@@ -75,7 +75,7 @@ resource "aws_ecs_task_definition" "demo_api" {
   container_definitions = jsonencode([
     {
       name      = "demo-api"
-      image     = "${aws_ecr_repository.demo_api.repository_url}:latest"
+      image     = "807229200787.dkr.ecr.ap-southeast-4.amazonaws.com/demo-dev-demo-api:v2"
       essential = true
       portMappings = [
         {
