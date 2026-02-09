@@ -6,6 +6,7 @@ locals {
   tags = {
     Project   = var.project
     Env       = var.env
+    Owner     = "Jacob"
     ManagedBy = "Terraform"
   }
 
